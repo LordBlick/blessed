@@ -30,7 +30,7 @@ var box = blessed.box({
 */
 
 var table = blessed.listtable({
-  parent: screen,
+  //parent: screen,
   top: 'center',
   left: 'center',
   data: null,
@@ -83,12 +83,15 @@ data2[1][0] = '{red-fg}' + data2[1][0] + '{/red-fg}';
 data2[2][0] += ' (' + DU + JUAN + ')';
 
 screen.key('q', function() {
-  return process.exit(0);
+  return screen.destroy();
 });
 
 table.focus();
 
 table.setData(data2);
+
+screen.append(table);
+
 screen.render();
 
 setTimeout(function() {

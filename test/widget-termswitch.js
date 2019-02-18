@@ -1,11 +1,13 @@
 var blessed = require('../')
-  , fs = require('fs');
+  , screen;
 
-var screen = blessed.screen({
-  dump: __dirname + '/logs/record.log',
+screen = blessed.screen({
+  dump: __dirname + '/logs/termswitch.log',
   smartCSR: true,
   warnings: true
 });
+
+var lorem = require('fs').readFileSync(__dirname + '/git.diff', 'utf8');
 
 var btext = blessed.box({
   parent: screen,
@@ -22,7 +24,7 @@ var btext = blessed.box({
 
 var text = blessed.scrollabletext({
   parent: screen,
-  content: fs.readFileSync(__dirname + '/git.diff', 'utf8'),
+  content: lorem,
   border: 'line',
   left: 'center',
   top: 'center',
@@ -36,16 +38,16 @@ var text = blessed.scrollabletext({
 
 text.focus();
 
-var frames = [];
-
-var timer = setInterval(function() {
-  frames.push(screen.screenshot());
-}, 100);
-
-screen.key('C-q', function() {
-  fs.writeFileSync(__dirname + '/frames.json', JSON.stringify(frames));
-  clearInterval(timer);
+screen.key('q', function() {
   return screen.destroy();
 });
 
 screen.render();
+
+setTimeout(function() {
+  // screen.setTerminal('vt100');
+  screen.terminal = 'vt100';
+  screen.render();
+  text.setContent(screen.program._terminal);
+  screen.render();
+}, 1000);

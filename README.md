@@ -30,16 +30,6 @@ Blessed has been used to implement other popular libraries and programs.
 Examples include: the [slap text editor][slap] and [blessed-contrib][contrib].
 The blessed API itself has gone on to inspire [termui][termui] for Go.
 
-## Important Blessed Changes (>0.0.51)
-
-- The absolute `.left` _property_ (not option) has been renamed to `.aleft`.
-  The `.rleft` property has been renamed to `.left`. This should not have much
-  effect on most applications. This includes all other coordinate properties.
-- `autoPadding` is now enabled by default. To revert to the original behavior,
-  pass `autoPadding: false` into the screen object. That being said, it would
-  be wiser to adjust your code to use `autoPadding`. Non-`autoPadding` is now
-  considered deprecated.
-
 ## Install
 
 ``` bash
@@ -52,17 +42,14 @@ This will render a box with line borders containing the text `'Hello world!'`,
 perfectly centered horizontally and vertically.
 
 __NOTE__: It is recommend you use either `smartCSR` or `fastCSR` as a
-`blessed.screen` option. `autoPadding` is also recommended; it will
-automatically offset box content within borders instead of on top of them when
-coords are `0`. Non-`autoPadding` _may_ be deprecated in the future. See the
-API documentation for further explanation of these options.
+`blessed.screen` option. This will enable CSR when scrolling text in elements
+or when manipulating lines.
 
 ``` js
 var blessed = require('blessed');
 
 // Create a screen object.
 var screen = blessed.screen({
-  autoPadding: true,
   smartCSR: true
 });
 
@@ -201,6 +188,8 @@ screen.render();
 - [Poisitioning](#positioning)
 - [Rendering](#rendering)
 - [Artificial Cursors](#artificial-cursors)
+- [Multiple Screens](#multiple-screens)
+- [Server Side Usage](#server-side-usage)
 
 ### Notes
 
@@ -309,8 +298,8 @@ The screen on which every other node renders.
   debug console which will display when pressing F12. It will display all log
   and debug messages.
 - __ignoreLocked__ - Array of keys in their full format (e.g. `C-c`) to ignore
-  when keys are locked. Useful for creating a key that will _always_ exit no
-  matter whether the keys are locked.
+  when keys are locked or grabbed. Useful for creating a key that will _always_
+  exit no matter whether the keys are locked.
 - __dockBorders__ - Automatically "dock" borders with other elements instead of
   overlapping, depending on position (__experimental__). For example:
   These border-overlapped elements:
@@ -339,6 +328,15 @@ The screen on which every other node renders.
 - __sendFocus__ - Send focus events after mouse is enabled.
 - __warnings__ - Display warnings (such as the output not being a TTY, similar
   to ncurses).
+- __forceUnicode__ - Force blessed to use unicode even if it is not detected
+  via terminfo, env variables, or windows code page. If value is `true` unicode
+  is forced. If value is `false` non-unicode is forced (default: `null`).
+- __input/output__ - Input and output streams. `process.stdin`/`process.stdout`
+  by default, however, it could be a `net.Socket` if you want to make a program
+  that runs over telnet or something of that nature.
+- __terminal__ - `TERM` name used for terminfo parsing. The `$TERM` env variable is
+  used by default.
+- __title__ - Set the terminal window title if possible.
 
 ##### Properties:
 
@@ -362,6 +360,8 @@ The screen on which every other node renders.
 - __grabKeys__ - Whether the focused element grabs all keypresses.
 - __lockKeys__ - Prevent keypresses from being received by any element.
 - __hover__ - The currently hovered element. Only set if mouse events are bound.
+- __terminal__ - Set or get terminal name. `Set` calls `screen.setTerminal()`
+  internally.
 - __title__ - Set or get window title.
 
 ##### Events:
@@ -390,6 +390,7 @@ The screen on which every other node renders.
   `debug` option was set.
 - __alloc()__ - Allocate a new pending screen buffer and a new output screen
   buffer.
+- __realloc()__ - Reallocate the screen buffers and clear the screen.
 - __draw(start, end)__ - Draw the screen based on the contents of the screen
   buffer.
 - __render()__ - Render all child elements, writing all data to the screen
@@ -443,9 +444,10 @@ The screen on which every other node renders.
   within the region. Returns a string containing only characters and SGR codes.
   Can be displayed by simply echoing it in a terminal.
 - __destroy()__ - Destroy the screen object and remove it from the global list.
-  Only useful if using multiple screens.
-- __program.destroy()__ - Destroy the program object and remove it from the
-  global list. Only useful if using multiple programs.
+  Also remove all global events relevant to the screen object. If all screen
+  objects are destroyed, the node process is essentially reset to its initial
+  state.
+- __setTerminal(term)__ - Reset the terminal to `term`. Reloads terminfo.
 
 
 #### Element (from Node)
@@ -1380,7 +1382,7 @@ manager. Requires term.js and pty.js to be installed. See
 - __shell__ - Name of shell. `$SHELL` by default.
 - __args__ - Args for shell.
 - __cursor__ - Can be `line`, `underline`, and `block`.
-- __term__ - Terminal name (Default: `xterm`).
+- __terminal__ - Terminal name (Default: `xterm`).
 - __env__ - Object for process env.
 - Other options similar to term.js'.
 
@@ -2125,6 +2127,111 @@ var screen = blessed.screen({
 ```
 
 
+#### Multiple Screens
+
+Blessed supports the ability to create multiple screens. This may not seem
+useful at first, but if you're writing a program that serves terminal
+interfaces over http, telnet, or any other protocol, this can be very useful.
+
+##### Server Side Usage
+
+A simple telnet server might look like this (see examples/blessed-telnet.js for
+a full example):
+
+``` js
+var blessed = require('blessed');
+var telnet = require('telnet2');
+
+telnet({ tty: true }, function(client) {
+  client.on('term', function(terminal) {
+    screen.terminal = terminal;
+    screen.render();
+  });
+
+  client.on('size', function(width, height) {
+    client.columns = width;
+    client.rows = height;
+    client.emit('resize');
+  });
+
+  var screen = blessed.screen({
+    smartCSR: true,
+    input: client,
+    output: client,
+    terminal: 'xterm-256color',
+    fullUnicode: true
+  });
+
+  client.on('close', function() {
+    if (!screen.destroyed) {
+      screen.destroy();
+    }
+  });
+
+  screen.key(['C-c', 'q'], function(ch, key) {
+    screen.destroy();
+  });
+
+  screen.on('destroy', function() {
+    if (client.writable) {
+      client.destroy();
+    }
+  });
+
+  screen.data.main = blessed.box({
+    parent: screen,
+    left: 'center',
+    top: 'center',
+    width: '80%',
+    height: '90%',
+    border: 'line',
+    content: 'Welcome to my server. Here is your own private session.'
+  });
+
+  screen.render();
+}).listen(2300);
+```
+
+Once you've written something similar and started it, you can simply telnet
+into your blessed app:
+
+``` bash
+$ telnet localhost 2300
+```
+
+Creating a netcat server would also work as long as you disable line buffering
+and terminal echo on the commandline via `stty`:
+`$ stty -icanon -echo; ncat localhost 2300; stty icanon echo`
+
+Or by using netcat's `-t` option: `$ ncat -t localhost 2300`
+
+Creating a streaming http 1.1 server than runs in the terminal is possible by
+curling it with special arguments: `$ curl -sSNT. localhost:8080`.
+
+There are currently no examples of netcat/nc/ncat or http->curl servers yet.
+
+---
+
+The `blessed.screen` constructor can accept `input`, `output`, and `term`
+arguments to aid with this. The multiple screens will be managed internally by
+blessed. The programmer just has to keep track of the references, however, to
+avoid ambiguity, it's possible to explicitly dictate which screen a node is
+part of by using the `screen` option when creating an element.
+
+The `screen.destroy()` method is also crucial: this will clean up all event
+listeners the screen has bound and make sure it stops listening on the event
+loop. Make absolutely certain to remember to clean up your screens once you're
+done with them.
+
+A tricky part is making sure to include the ability for the client to send the
+TERM which is reset on the serverside, and the terminal size, which is should
+also be reset on the serverside. Both of these capabilities are demonstrated
+above.
+
+For a working example of a blessed telnet server, see
+`examples/blessed-telnet.js`.
+
+
 ### Notes
 
 
@@ -2137,7 +2244,7 @@ Windows users will need to explicitly set `term` when creating a screen like so
 This is now handled automatically):
 
 ``` js
-var screen = blessed.screen({ term: 'windows-ansi' });
+var screen = blessed.screen({ terminal: 'windows-ansi' });
 ```
 
 
